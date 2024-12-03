@@ -171,11 +171,11 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
     )
     bounds = [(0, 1) for _ in range(num_channels)]  # Доли в диапазоне [0,1]
 
-    # Целевая функция: разница между фактическим и целевым доходом
+    # Целевая функция: квадрат разницы между фактическим и целевым доходом
     def objective(x):
         # Запуск симуляции с данным миксом
         simulation_results = monte_carlo_simulation(
-            n_simulations=100,
+            n_simulations=500,
             mix=x,
             CPL_min=CPL_min,
             Costs_min=Costs_min,
@@ -190,18 +190,25 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
         )
         # Используем среднее значение дохода
         average_revenue = simulation_results['Total_Revenue'].mean()
-        # Целевая функция: минимизировать разницу между средним доходом и целевым
-        return abs(average_revenue - target_revenue)
+        # Целевая функция: минимизировать квадрат разницы между средним доходом и целевым
+        return (average_revenue - target_revenue) ** 2
 
-    # Запуск оптимизации
-    result = minimize(
-        objective,
-        x0,
-        method='SLSQP',
-        bounds=bounds,
-        constraints=constraints,
-        options={'disp': True}
-    )
+    try:
+        # Запуск оптимизации
+        result = minimize(
+            objective,
+            x0,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints,
+            options={'disp': True, 'maxiter': 1000}
+        )
+    except Exception as e:
+        st.error(f"Оптимизация не удалась из-за ошибки: {e}")
+        return None, None, None, None, None
+
+    if not result.success:
+        return None, None, None, None, result
 
     # Получаем оптимальный микс
     optimal_mix = result.x
@@ -227,6 +234,7 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
     average_roi = (average_revenue - budget) / budget * 100
 
     return optimal_mix, average_revenue, average_rmmc, average_roi, result
+
 
 def main():
     st.set_page_config(page_title="Маркетинговая симуляция Монте-Карло", layout="wide")
