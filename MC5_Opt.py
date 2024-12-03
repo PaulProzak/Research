@@ -152,7 +152,7 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
 
     # Целевая функция
     def objective(x):
-        x = x / np.sum(x)  # Нормализуем доли
+        x = x / np.sum(x)  # Нормализуем доли, сумма будет равна 1
         simulation_results = monte_carlo_simulation(
             n_simulations=500,
             mix=x,
@@ -170,17 +170,10 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
         average_rmmc = simulation_results['Total_RMMC'].mean()
         return -average_rmmc  # Максимизируем прибыль
 
-    # Ограничение: сумма долей равна 1
-    def constraint_sum(x):
-        return np.sum(x) - 1
-
-    constraints = {'type': 'eq', 'fun': constraint_sum}
-
-    # Запуск оптимизации
+    # Запуск оптимизации без ограничений
     result = differential_evolution(
         objective,
         bounds=bounds,
-        constraints=(constraints,),
         strategy='best1bin',
         maxiter=100,
         popsize=15,
@@ -428,4 +421,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
