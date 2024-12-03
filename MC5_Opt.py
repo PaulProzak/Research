@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import logging
 import streamlit as st
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution
 
 # Установка фиксированного зерна для генерации случайных чисел
 np.random.seed(42)
@@ -144,36 +144,15 @@ def plot_histograms(all_results_df):
     )
     st.plotly_chart(fig)
 
-from scipy.optimize import minimize
-
-def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, budget, channels, target_revenue):
-    """
-    Функция для оптимизации маркетингового микса.
-
-    Параметры:
-    - Все параметры модели.
-    - target_revenue (float): Целевой доход, которого нужно достичь.
-
-    Возвращает:
-    - Оптимальный микс каналов.
-    - Ожидаемый доход и другие метрики.
-    - Результат оптимизации.
-    """
-
+def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, budget, channels):
     num_channels = len(channels)
 
-    # Начальное приближение для микса (равномерное распределение)
-    x0 = np.array([1.0 / num_channels] * num_channels)
+    # Границы для долей (от 0 до 1)
+    bounds = [(0, 1) for _ in range(num_channels)]
 
-    # Ограничения: сумма долей должна быть 1, доли от 0 до 1
-    constraints = (
-        {'type': 'eq', 'fun': lambda x: np.sum(x) - 1},  # Сумма долей равна 1
-    )
-    bounds = [(0, 1) for _ in range(num_channels)]  # Доли в диапазоне [0,1]
-
-    # Целевая функция: квадрат разницы между фактическим и целевым доходом
+    # Целевая функция
     def objective(x):
-        # Запуск симуляции с данным миксом
+        x = x / np.sum(x)  # Нормализуем доли
         simulation_results = monte_carlo_simulation(
             n_simulations=500,
             mix=x,
@@ -188,32 +167,38 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
             budget=budget,
             channels=channels
         )
-        # Используем среднее значение дохода
-        average_revenue = simulation_results['Total_Revenue'].mean()
-        # Целевая функция: минимизировать квадрат разницы между средним доходом и целевым
-        return (average_revenue - target_revenue) ** 2
+        average_rmmc = simulation_results['Total_RMMC'].mean()
+        return -average_rmmc  # Максимизируем прибыль
 
-    try:
-        # Запуск оптимизации
-        result = minimize(
-            objective,
-            x0,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints,
-            options={'disp': True, 'maxiter': 1000}
-        )
-    except Exception as e:
-        st.error(f"Оптимизация не удалась из-за ошибки: {e}")
-        return None, None, None, None, None
+    # Ограничение: сумма долей равна 1
+    def constraint_sum(x):
+        return np.sum(x) - 1
+
+    constraints = {'type': 'eq', 'fun': constraint_sum}
+
+    # Запуск оптимизации
+    result = differential_evolution(
+        objective,
+        bounds=bounds,
+        constraints=(constraints,),
+        strategy='best1bin',
+        maxiter=100,
+        popsize=15,
+        tol=0.01,
+        mutation=(0.5, 1),
+        recombination=0.7,
+        seed=None,
+        disp=True,
+        polish=True,
+        init='latinhypercube'
+    )
 
     if not result.success:
         return None, None, None, None, result
 
-    # Получаем оптимальный микс
-    optimal_mix = result.x
+    optimal_mix = result.x / np.sum(result.x)  # Нормализуем доли
 
-    # Запускаем симуляцию с оптимальным миксом для получения метрик
+    # Запуск симуляции с оптимальным миксом
     simulation_results = monte_carlo_simulation(
         n_simulations=1000,
         mix=optimal_mix,
@@ -228,13 +213,11 @@ def optimize_mix(CPL_min, Costs_min, a, ARPU, C1_mean, C1_std, C2_low, C2_high, 
         budget=budget,
         channels=channels
     )
-    # Расчет средних метрик
     average_revenue = simulation_results['Total_Revenue'].mean()
     average_rmmc = simulation_results['Total_RMMC'].mean()
     average_roi = (average_revenue - budget) / budget * 100
 
     return optimal_mix, average_revenue, average_rmmc, average_roi, result
-
 
 def main():
     st.set_page_config(page_title="Маркетинговая симуляция Монте-Карло", layout="wide")
@@ -396,9 +379,9 @@ def main():
 
     # Вкладка "Оптимизация"
     with tabs[5]:
-        st.header("Оптимизация маркетингового микса")
+        st.header("Оптимизация маркетингового микса (Максимизация прибыли)")
 
-        st.write("Эта секция позволяет найти оптимальный микс каналов для достижения заданного целевого дохода.")
+        st.write("Эта секция позволяет найти оптимальный микс каналов для максимизации прибыли (RMMC).")
 
         if st.button("Запустить оптимизацию"):
             # Подготовка данных для оптимизации
@@ -420,11 +403,10 @@ def main():
                     C2_low=C2_low,
                     C2_high=C2_high,
                     budget=Marketing_Costs_Target,
-                    channels=channels,
-                    target_revenue=Revenue_Target
+                    channels=channels
                 )
 
-            if optimization_result.success:
+            if optimization_result is not None and optimization_result.success:
                 # Отображение результатов
                 st.subheader("Оптимальный микс каналов:")
                 optimal_mix_df = pd.DataFrame({
@@ -441,7 +423,9 @@ def main():
                 col3.metric("ROI", f"{avg_roi:.2f}%")
             else:
                 st.error("Оптимизация не удалась. Попробуйте изменить параметры или проверить настройки.")
-                st.write(f"Сообщение об ошибке: {optimization_result.message}")
+                if optimization_result is not None:
+                    st.write(f"Сообщение об ошибке: {optimization_result.message}")
 
 if __name__ == "__main__":
     main()
+
